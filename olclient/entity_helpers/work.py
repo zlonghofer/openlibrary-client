@@ -163,7 +163,7 @@ def get_work_helper_class(ol_context):
             r = self.OL.get_ol_response(path)
             return self(olid, **r.json())
 
-        def search(self, title: Optional[str] = None, author: Optional[str] = None) -> Optional[Book]:
+        def search(self, title: Optional[str] = None, author: Optional[str] = None, first=False) -> Optional[Book]:
             """Get the *closest* matching result in OpenLibrary based on a title
             and author.
             FIXME: This is essentially a Work and should be moved there
@@ -197,9 +197,10 @@ def get_work_helper_class(ol_context):
             response = _get_book_by_metadata(url)
             results = Results(**response.json())
 
-            if results.num_found:
-                return results.first.to_book()
-
-            return None
+            if first:
+                if results.num_found:
+                    return results.first.to_book()
+                return None
+            return results
 
     return Work(ol_context)
