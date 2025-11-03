@@ -163,9 +163,12 @@ class OpenLibrary:
     def Edition(ol_self):
         class Edition(common.Book):
 
-            OL = ol_self
+            __slots__ = ('OL', )
 
-            def __init__(
+            def __init__(self, library: OpenLibrary):
+                self.OL = library
+            
+            def __call__(
                 self,
                 work_olid,
                 edition_olid,
@@ -207,6 +210,7 @@ class OpenLibrary:
                     cover=cover,
                     **kwargs,
                 )
+                return self
 
             @staticmethod
             def _validate_identifiers(identifiers):
@@ -222,7 +226,7 @@ class OpenLibrary:
                 """Returns a dict JSON representation of an OL Edition suitable
                 for saving back to Open Library via its APIs.
                 """
-                exclude = ['_work', 'olid', 'work_olid', 'pages']
+                exclude = ['_work', 'olid', 'work_olid', 'pages', 'OL']
                 data = {
                     k: v for k, v in self.__dict__.items() if v and k not in exclude
                 }
@@ -305,8 +309,7 @@ class OpenLibrary:
                 """
                 return cls.OL.create_book(book, work_olid=work_olid, debug=debug)
 
-            @classmethod
-            def ol_edition_json_to_book_args(cls, data):
+            def ol_edition_json_to_book_args(self, data):
                 """Creates Book Arguments from OL Edition JSON
 
                 Args:
@@ -326,15 +329,14 @@ class OpenLibrary:
                     if 'works' in data
                     else None,
                     'authors': [
-                        cls.OL.Author.get(author['key'].split('/')[-1])
+                        self.OL.Author.get(author['key'].split('/')[-1])
                         for author in data.pop('authors', [])
                     ],
                 }
                 book_args.update(data)
                 return book_args
 
-            @classmethod
-            def get(cls, olid=None, isbn=None, oclc=None, lccn=None, ocaid=None):
+            def get(self, olid=None, isbn=None, oclc=None, lccn=None, ocaid=None):
                 """Retrieves a single book from OpenLibrary as json by isbn or olid or ocaid or lccn or oclc or olid.
 
                 Args:
@@ -369,42 +371,37 @@ class OpenLibrary:
                 elif not olid:
                     bibkeys = {'ISBN': isbn, 'OCLC': oclc, 'OCAID': ocaid, 'LCCN': lccn}
                     bibkey, value = [(k, v) for k, v in bibkeys.items() if v][0]
-                    olid = cls.get_olid(bibkey, value)
+                    olid = self.get_olid(bibkey, value)
                     if not olid:
                         # No edition found by bibkey
                         return
 
                 path = f'/books/{olid}.json'
-                response = cls.OL.get_ol_response(path)
+                response = self.OL.get_ol_response(path)
 
                 try:
                     data = response.json()
                     data['title'] = data.get('title', None)
-                    edition = cls(**cls.ol_edition_json_to_book_args(data))
+                    edition = self(**self.ol_edition_json_to_book_args(data))
                     return edition
                 except Exception as e:
                     raise Exception(
                         f"Unable to get Edition with olid: {olid}\nDetails: {e}"
                     )
 
-            @classmethod
-            def get_olid_by_ocaid(cls, ocaid):
-                return cls.get_olid('OCAID', ocaid)
+            def get_olid_by_ocaid(self, ocaid):
+                return self.get_olid('OCAID', ocaid)
 
-            @classmethod
-            def get_olid_by_isbn(cls, isbn):
-                return cls.get_olid('ISBN', isbn)
+            def get_olid_by_isbn(self, isbn):
+                return self.get_olid('ISBN', isbn)
 
-            @classmethod
-            def get_olid_by_lccn(cls, lccn):
-                return cls.get_olid('LCCN', lccn)
+            def get_olid_by_lccn(self, lccn):
+                return self.get_olid('LCCN', lccn)
 
-            @classmethod
-            def get_olid_by_oclc(cls, oclc):
-                return cls.get_olid('OCLC', oclc)
+            def get_olid_by_oclc(self, oclc):
+                return self.get_olid('OCLC', oclc)
 
-            @classmethod
-            def get_olid(cls, key, value):
+            def get_olid(self, key, value):
                 """Looks up a key (LCCN, OCLC, ISBN10/13, OCAID) in OpenLibrary and returns a
                 matching olid if a match exists.
 
@@ -415,13 +412,12 @@ class OpenLibrary:
                 Returns:
                     olid (unicode) or None
                 """
-                metadata = cls.get_metadata(key, value)
+                metadata = self.get_metadata(key, value)
                 if metadata:
                     book_url = metadata.get('info_url', '')
-                    return cls.OL._extract_olid_from_url(book_url, url_type="books")
+                    return self.OL._extract_olid_from_url(book_url, url_type="books")
 
-            @classmethod
-            def get_metadata(cls, key, value):
+            def get_metadata(self, key, value):
                 """Looks up a key (LCCN, OCLC, ISBN10/13, OCAID) using the Open Library
                 Books API https://openlibrary.org/dev/docs/api/books
                 Returns first matched JSON object for the bibliographic key,
@@ -459,7 +455,7 @@ class OpenLibrary:
                     )
 
                 path = f'/api/books.json?bibkeys={key}:{value}'
-                response = cls.OL.get_ol_response(path)
+                response = self.OL.get_ol_response(path)
 
                 try:
                     results = response.json()
@@ -471,17 +467,21 @@ class OpenLibrary:
                     return results[_key]
                 return None
 
-        return Edition
+        return Edition(ol_self)
 
     @property
     def Author(ol_self):
         class Author(common.Author):
 
-            OL = ol_self
+            __slots__ = ('OL', )
 
-            def __init__(self, olid, name, **author_kwargs):
+            def __init__(self, library: OpenLibrary):
+                self.OL = library
+
+            def __call__(self, olid, name, **author_kwargs):
                 self.olid = olid
                 super().__init__(name, **author_kwargs)
+                return self
 
             @staticmethod
             def _validate_name(name):
@@ -519,7 +519,7 @@ class OpenLibrary:
                 url = self.OL.base_url + f'/authors/{self.olid}.json'
                 return self.OL.session.put(url, json.dumps(body))
 
-            def works(self, limit=OL.WORKS_LIMIT, offset=OL.WORKS_PAGINATION_OFFSET):
+            def works(self, limit=None, offset=None):
                 """Returns a list of OpenLibrary Works associated with an OpenLibrary Author.
 
                 Args:
@@ -561,8 +561,7 @@ class OpenLibrary:
                     logger.exception(e)
                     raise Exception("Author API failed to return json")
 
-            @classmethod
-            def get(cls, olid):
+            def get(self, olid):
                 """Retrieves an OpenLibrary Author by author_olid
                 Args:
                     olid (unicode) - OpenLibrary ID for author to search within
@@ -578,24 +577,23 @@ class OpenLibrary:
                     >>> ol.Author.get('OL39307A')
                 """
                 path = f'/authors/{olid}.json'
-                r = cls.OL.get_ol_response(path)
+                r = self.OL.get_ol_response(path)
                 try:
                     data = r.json()
-                    olid = cls.OL._extract_olid_from_url(
+                    olid = self.OL._extract_olid_from_url(
                         data.pop('key', ''), url_type='authors'
                     )
                 except:
                     raise Exception(f"Unable to get Author with olid: {olid}")
 
-                return cls(
+                return self(
                     olid,
                     name=data.pop('name', ''),
                     bio=OpenLibrary.get_text_value(data.pop('bio', None)),
                     **data,
                 )
 
-            @classmethod
-            def search(cls, name, limit=1):
+            def search(self, name, limit=1):
                 """Finds a list of OpenLibrary authors with similar names to the
                 search query using the Author auto-complete API.
 
@@ -619,23 +617,22 @@ class OpenLibrary:
                     err = lambda e: logger.exception(
                         "Error fetching author matches: %s", e
                     )
-                    url = cls.OL.base_url + '/authors/_autocomplete?q={}&limit={}'.format(
+                    url = self.OL.base_url + '/authors/_autocomplete?q={}&limit={}'.format(
                         name,
                         limit,
                     )
 
-                    @backoff.on_exception(on_giveup=err, **cls.OL.BACKOFF_KWARGS)
+                    @backoff.on_exception(on_giveup=err, **self.OL.BACKOFF_KWARGS)
                     def _get_matching_authors_by_name(url):
                         """Makes best effort to perform request w/ exponential backoff"""
-                        return cls.OL.session.get(url)
+                        return self.OL.session.get(url)
 
                     response = _get_matching_authors_by_name(url)
                     author_matches = response.json()
                     return author_matches
                 return []
 
-            @classmethod
-            def get_olid_by_name(cls, name):
+            def get_olid_by_name(self, name):
                 """Uses the Authors auto-complete API to find OpenLibrary Authors with
                 similar names. If any name is an exact match then return the
                 matching author's 'key' (i.e. olid). Otherwise, return None.
@@ -655,7 +652,7 @@ class OpenLibrary:
                     >>> ol = OpenLibrary()
                     >>> ol.Author.get_olid_by_name('Dan Brown')
                 """
-                authors = cls.search(name)
+                authors = self.search(name)
                 _name = name.lower().strip()
                 for author in authors:
                     if _name == author['name'].lower().strip():
@@ -663,7 +660,7 @@ class OpenLibrary:
                 return None
 
         # This returns the Author class from the ol.Author factory method
-        return Author
+        return Author(ol_self)
 
     @property
     def Delete(ol_self):

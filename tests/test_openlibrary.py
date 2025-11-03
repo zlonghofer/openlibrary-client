@@ -8,11 +8,14 @@ import pytest
 import requests
 import unittest
 
+from pathlib import Path
 from unittest.mock import Mock, call, patch, ANY
 
 from olclient.config import Config
 from olclient.common import Author, Book
 from olclient.openlibrary import OpenLibrary
+
+RESOURCES_PATH = Path(__file__) / '../resources'
 
 
 def create_edition(ol, **kwargs):
@@ -172,6 +175,49 @@ class TestOpenLibrary(unittest.TestCase):
             got_result == expected_result,
             f"Expected create_book to return {expected_result}, got {got_result}",
         )
+
+    @patch('requests.Session.get')
+    def test_work_editions(self, mock_get):
+        with open(RESOURCES_PATH / 'OL21041329W_editions.json') as f:
+            editions_json = json.load(f)
+        mock_get.return_value.json.return_value = editions_json
+        editions = self.ol.Work('OL21041329W').editions
+        url = f"{self.ol.base_url}/works/OL21041329W/editions.json"
+        first_call = mock_get.call_args_list[0].args[0]
+        self.assertTrue(
+            first_call == url,
+            f"Expected to request {url}. Requested {first_call}"
+        )
+        self.assertTrue(
+            len(editions) == 2,
+            f"Expected Work.editions to contain 2 editions, got {len(editions)}",
+        )
+        expected = [
+            ['Solzhenitsyn, aleksandr isaevich, 1918-2008'],
+            ['Fiction, general', 'Soviet union, fiction']
+        ]
+        actual = [e.subjects for e in editions]
+        self.assertTrue(
+            actual == expected,
+            f"Expected subjects {expected}, got subjects {actual}"
+        )
+        self.assertTrue(
+            len(mock_get.call_args_list) == 5,
+            f"Expected to call OL.session.get 5 times, instead called {len(mock_get.call_args_list)} times."
+        )
+
+    @patch('requests.Session.get')
+    @patch('requests.Session.put')
+    def test_work_subjects(self, mock_put, mock_get):
+        with open(RESOURCES_PATH / 'OL21041329W_works.json') as f:
+            works_json = json.load(f)
+        mock_get.return_value.json.return_value = works_json
+        work = self.ol.Work('OL21041329W')
+        url = f"{self.ol.base_url}/works/{work.olid}.json"
+        work.add_subject('test', 'test')
+        mock_put.assert_called_with(url, ANY)
+        work.rm_subjects(['test'], 'test')
+        mock_put.assert_called_with(url, json.dumps(works_json))
 
     def test_get_work(self):
         work_json = {'title': 'All Quiet on the Western Front'}

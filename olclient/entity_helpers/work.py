@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, TYPE_CHECKING
 
 import backoff
 from requests import Response
 
 from olclient.common import Entity, Book
 from olclient.helper_classes.results import Results
+if TYPE_CHECKING:
+    from olclient.openlibrary import OpenLibrary
 from olclient.utils import merge_unique_lists, get_text_value, get_approval_from_cli
 
 logger = logging.getLogger('open_library_work')
@@ -18,22 +20,25 @@ logger = logging.getLogger('open_library_work')
 def get_work_helper_class(ol_context):
     class Work(Entity):
 
-        OL = ol_context
+        def __init__(self, library: OpenLibrary | str | None=None, identifiers=None):
+            self.OL = library
+            super().__init__(identifiers=identifiers)
 
-        def __init__(self, olid: str, identifiers=None, **kwargs):
-            super().__init__(identifiers)
+        def __call__(self, olid: str, identifiers=None, **kwargs):
+            super().__init__(identifiers=identifiers)
             self.olid = olid
             self._editions: List = []
             self.description = get_text_value(kwargs.pop('description', None))
             self.notes = get_text_value(kwargs.pop('notes', None))
             for kwarg in kwargs:
                 setattr(self, kwarg, kwargs[kwarg])
+            return self
 
         def json(self) -> dict:
             """Returns a dict JSON representation of an OL Work suitable
             for saving back to Open Library via its APIs.
             """
-            exclude = ['_editions', 'olid']
+            exclude = ['_editions', 'olid', 'OL']
             data = {k: v for k, v in self.__dict__.items() if v and k not in exclude}
             data['key'] = '/works/' + self.olid
             data['type'] = {'key': '/type/work'}
@@ -84,8 +89,7 @@ def get_work_helper_class(ol_context):
             ]
             return self._editions
 
-        @classmethod
-        def create(cls, book: Book, debug=False) -> Work:
+        def create(self, book: Book, debug=False) -> Work:
             """Creates a new work along with a new edition
             Usage:
                 >>> from olclient.openlibrary import OpenLibrary
@@ -97,7 +101,7 @@ def get_work_helper_class(ol_context):
             """
             year_matches_in_date: list[Any] = re.findall(r'[\d]{4}', book.publish_date)
             book.publish_date = year_matches_in_date[0] if len(year_matches_in_date) > 0 else ''
-            ed = cls.OL.create_book(book, debug=debug)
+            ed = self.OL.create_book(book, debug=debug)
             ed.add_bookcover(book.cover)
             work = ed.work
             work.add_bookcover(book.cover)
@@ -154,14 +158,12 @@ def get_work_helper_class(ol_context):
             url = self.OL.base_url + f'/works/{self.olid}.json'
             return self.OL.session.put(url, json.dumps(body))
 
-        @classmethod
-        def get(cls, olid: str) -> Work:
+        def get(self, olid: str) -> Work:
             path = f'/works/{olid}.json'
-            r = cls.OL.get_ol_response(path)
-            return cls(olid, **r.json())
+            r = self.OL.get_ol_response(path)
+            return self(olid, **r.json())
 
-        @classmethod
-        def search(cls, title: Optional[str] = None, author: Optional[str] = None) -> Optional[Book]:
+        def search(self, title: Optional[str] = None, author: Optional[str] = None, first=False) -> Optional[Book]:
             """Get the *closest* matching result in OpenLibrary based on a title
             and author.
             FIXME: This is essentially a Work and should be moved there
@@ -179,7 +181,7 @@ def get_work_helper_class(ol_context):
             if not (title or author):
                 raise ValueError("Author or title required for metadata search")
 
-            url = f'{cls.OL.base_url}/search.json?title={title}'
+            url = f'{self.OL.base_url}/search.json?title={title}'
             if author:
                 url += f'&author={author}'
 
@@ -187,17 +189,18 @@ def get_work_helper_class(ol_context):
                 on_giveup=lambda error: logger.exception(
                     "Error retrieving metadata for book: %s", error
                 ),
-                **cls.OL.BACKOFF_KWARGS,
+                **self.OL.BACKOFF_KWARGS,
             )
             def _get_book_by_metadata(ol_url):
-                return cls.OL.session.get(ol_url)
+                return self.OL.session.get(ol_url)
 
             response = _get_book_by_metadata(url)
             results = Results(**response.json())
 
-            if results.num_found:
-                return results.first.to_book()
+            if first:
+                if results.num_found:
+                    return results.first.to_book()
+                return None
+            return results
 
-            return None
-
-    return Work
+    return Work(ol_context)
